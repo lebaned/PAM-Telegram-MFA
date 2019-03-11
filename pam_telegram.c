@@ -40,6 +40,7 @@ static size_t write_data(void *contents, size_t size, size_t nmemb, struct Memor
     if(mem->memory == NULL) {
         /* out of memory! */ 
         puts("MFA: not enough memory (realloc returned NULL)");
+        
         return 0;
     }
 
@@ -57,6 +58,39 @@ void delay(int milli_seconds)
     while (clock() < start_time + ((float)(milli_seconds/1000.0)*CLOCKS_PER_SEC)); 
 }
 
+/* this function is ripped from pam_unix/support.c, it lets us do IO via PAM */
+int converse( pam_handle_t *pamh, int nargs, struct pam_message **message, struct pam_response **response )
+{
+	int retval ;
+	struct pam_conv *conv ;
+
+	retval = pam_get_item( pamh, PAM_CONV, (const void **) &conv ) ; 
+	if( retval==PAM_SUCCESS ) {
+		retval = conv->conv( nargs, (const struct pam_message **) message, response, conv->appdata_ptr ) ;
+	}
+
+	return retval ;
+}
+
+void converseInfo(pam_handle_t *pamh, const char* pMessage, ...)
+{
+    va_list args;
+    struct pam_message msg,*pmsg[1];
+    struct pam_response *resp;
+    char pBuf[200];
+
+    va_start (args, pMessage);
+    vsprintf (pBuf, pMessage, args);
+    va_end (args);
+
+    pmsg[0] = &msg;
+    msg.msg_style = PAM_TEXT_INFO;
+	msg.msg = pBuf;    
+	
+    converse(pamh, 1 , pmsg, &resp);
+
+}
+
 
 /* expected hook */
 int pam_sm_setcred( pam_handle_t *pamh, int flags, int argc, const char **argv ) 
@@ -72,6 +106,9 @@ int pam_sm_authenticate( pam_handle_t *pamh, int flags,int argc, const char **ar
     config_setting_t *root, *setting;
     const char* pUsername;
     char* pBaseurl;
+
+    struct pam_message msg[1],*pmsg[1];
+    struct pam_response *resp;
 
     char apiurl[] = "https://api.telegram.org/bot";
 
@@ -92,7 +129,7 @@ int pam_sm_authenticate( pam_handle_t *pamh, int flags,int argc, const char **ar
 
     if (!config_read_file(&cfg, configFile)) {
         logging("Error","Configuration file not found");
-        puts("MFA: Error: Check logging for details");
+        converseInfo(pamh,"MFA: Error: Check logging for details");
         config_destroy(&cfg);
         return 1;
     }
@@ -127,7 +164,7 @@ int pam_sm_authenticate( pam_handle_t *pamh, int flags,int argc, const char **ar
     /* Get apikey from config file*/
     setting = config_setting_get_member(root, "apikey");
     if (!setting) {
-        puts("MFA: Api key not found.");  
+        converseInfo(pamh,"MFA: Api key not found.");
         return 1;
     }
 
@@ -138,34 +175,35 @@ int pam_sm_authenticate( pam_handle_t *pamh, int flags,int argc, const char **ar
 
     if (telegramSend2fa(pBaseurl, chatId)) {    /* 2fa message send? */
         int i;
-        printf("MFA message send... Please respond within %i seconds\n", timeout);
-
+        
+        converseInfo(pamh,"MFA message send... Please respond within %i seconds", timeout);
+        
         for (i=0; i<timeout; i++) {
             char *response;
             
             if (telegramGetResponse(pBaseurl,chatId,&response)) {
                 if (response != NULL) {
                     if (strcmp(response, "\"Approve\"") == 0) {
-                        puts("MFA: Ok");
+                        converseInfo(pamh,"MFA: Ok");
                         free(response);
                         return PAM_SUCCESS;   /* Get an approve message from telegram > return 0 = OK */
                     } else if (strcmp(response, "\"Deny\"") == 0) {
                         free(response);
                         free(pBaseurl);
-                        puts("MFA: Failed");
+                        converseInfo(pamh,"MFA: Failed");
                         return PAM_OPEN_ERR;
                     }   
                 }
             } else {
                 free(response);
-                puts("MFA: Error while retrieving response. Check log for details");
+                converseInfo(pamh,"MFA: Error while retrieving response. Check log for details");
                 break;
             }
             delay(1000); 
         }
-        puts("MFA: No response");
+        converseInfo(pamh,"MFA: No response");
     } else {
-        puts("MFA: Error: Cannot send the 2fa message. Check the logs for details");
+        converseInfo(pamh,"MFA: Error: Cannot send the 2fa message. Check the logs for details");
     }
 
     free(pBaseurl);
@@ -360,8 +398,6 @@ void logging(const char* pLogtype,const char* pFormat, ...) {
     struct tm *info;
     char formattedTime[20];
 
-    int valtest;
-
     //FILE *pLogfile = ;
     FILE *pLogfile = fopen(pLogfilePath, "a");
 
@@ -380,7 +416,7 @@ void logging(const char* pLogtype,const char* pFormat, ...) {
     sprintf(pBuf, "%s [%s] %s\n", formattedTime, pLogtype, pFormat);
 
     va_start (args, pFormat);
-    valtest = vfprintf (pLogfile, pBuf, args);
+    vfprintf (pLogfile, pBuf, args);
     va_end (args);
     fclose(pLogfile);
 }

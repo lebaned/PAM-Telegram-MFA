@@ -8,7 +8,11 @@ sudo ld -lcurl -lconfig -ljson-c -x --shared -o /lib/security/pam_telegram.so pa
 
 ## PAM
 ```
+# For testing:
 auth        optional    pam_telegram.so [/path/to/pam_telegram.cfg]
+
+# Production:
+auth        required    pam_telegram.so [/path/to/pam_telegram.cfg]
 ```
 
 ## Configuration
